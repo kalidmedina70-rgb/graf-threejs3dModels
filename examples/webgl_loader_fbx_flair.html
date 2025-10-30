@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>three.js webgl - FBX loader</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link type="text/css" rel="stylesheet" href="main.css">
+</head>
+
+<body>
+    <div id="info">
+        <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - FBXLoader<br />
+        Character and animation from <a href="https://www.mixamo.com/" target="_blank" rel="noopener">Mixamo</a>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "../build/three.module.js",
+                "three/addons/": "./jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+import * as THREE from 'three';
+import Stats from 'three/addons/libs/stats.module.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { Audio, AudioListener, AudioLoader } from 'three';
+
+const manager = new THREE.LoadingManager();
+let camera, scene, renderer, stats, object, loader, mixer, guiMorphsFolder;
+const clock = new THREE.Clock();
+
+const params = { asset: 'Capoeira' };
+const assets = ['Flair', 'morph_test', 'Capoeira'];
+
+init();
+
+function init() {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+
+    // 📷 Cámara
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
+    camera.position.set(150, 150, 350);
+
+    // 🌌 Escena y bruma suave
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x20242a);
+    scene.fog = new THREE.Fog(0x20242a, 300, 900); // color + inicio + fin
+
+    // 💡 Iluminación principal
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3.5);
+    dirLight.position.set(150, 200, 100);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 1000;
+    dirLight.shadow.camera.left = -200;
+    dirLight.shadow.camera.right = 200;
+    dirLight.shadow.camera.top = 200;
+    dirLight.shadow.camera.bottom = -200;
+    scene.add(dirLight);
+
+    // 🔆 Luz de relleno cálida
+    const fillLight = new THREE.PointLight(0xffaa55, 1.2, 600);
+    fillLight.position.set(-200, 100, 200);
+    scene.add(fillLight);
+
+    // 💫 Luz ambiental leve
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    scene.add(ambientLight);
+
+    // 🌫️ Luz giratoria para efecto dinámico
+    const movingLight = new THREE.PointLight(0x66ccff, 2, 800);
+    movingLight.position.set(0, 200, 0);
+    scene.add(movingLight);
+
+    // 🪞 Piso procedural con cuadrícula metálica
+    const gridSize = 2000;
+    const gridDivs = 20;
+    const gridHelper = new THREE.GridHelper(gridSize, gridDivs, 0x333333, 0x666666);
+    gridHelper.material.opacity = 0.4;
+    gridHelper.material.transparent = true;
+
+    const floorMaterial = new THREE.MeshStandardMaterial({
+        color: 0x99aaff,
+        metalness: 0.8,
+        roughness: 0.3
+    });
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(gridSize, gridSize), floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    scene.add(gridHelper);
+
+    // 🧍 Carga del modelo FBX
+    loader = new FBXLoader(manager);
+    loadAsset(params.asset);
+
+    // ⚙️ Renderizador
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // 🌀 Controles de cámara
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 100, 0);
+    controls.update();
+
+    // 📈 Stats
+    stats = new Stats();
+    container.appendChild(stats.dom);
+
+    // 🎛 GUI
+    const gui = new GUI();
+    gui.add(params, 'asset', assets).onChange(value => loadAsset(value));
+    guiMorphsFolder = gui.addFolder('Morphs').hide();
+
+    // 🌅 HDRI de entorno
+    const rgbeLoader = new RGBELoader();
+    rgbeLoader.load('models/rgbe/rogland_clear_night_4k.hdr', texture => {
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        scene.environment = texture;
+    });
+
+    // 🎵 Música de fondo
+    const listener = new AudioListener();
+    camera.add(listener);
+    const sound = new Audio(listener);
+    const audioLoader = new AudioLoader();
+    audioLoader.load('models/rgbe/Plants vs Zombies Music - Night Time in Front Yard.mp3', buffer => {
+        sound.setBuffer(buffer);
+        sound.setLoop(true);
+        sound.setVolume(0.5);
+        sound.play();
+    });
+
+    // 📏 Resize
+    window.addEventListener('resize', onWindowResize);
+
+    // 🔁 Animación
+    function animate() {
+        const delta = clock.getDelta();
+        if (mixer) mixer.update(delta);
+
+        // Luz giratoria
+        const time = Date.now() * 0.001;
+        movingLight.position.x = Math.sin(time) * 300;
+        movingLight.position.z = Math.cos(time) * 300;
+
+        renderer.render(scene, camera);
+        stats.update();
+    }
+
+    renderer.setAnimationLoop(animate);
+}
+
+function loadAsset(asset) {
+    loader.load('models/fbx/' + asset + '.fbx', function (group) {
+        if (object) scene.remove(object);
+        object = group;
+
+        // Animaciones
+        if (object.animations && object.animations.length) {
+            mixer = new THREE.AnimationMixer(object);
+            mixer.clipAction(object.animations[0]).play();
+        } else mixer = null;
+
+        // 🎨 Material metálico brillante
+        object.traverse(child => {
+            if (child.isMesh) {
+                child.material = new THREE.MeshPhysicalMaterial({
+                    color: 0xb0c4de,
+                    metalness: 1.0,
+                    roughness: 0.2,
+                    reflectivity: 1.0,
+                    clearcoat: 1.0,
+                    clearcoatRoughness: 0.05,
+                    envMapIntensity: 1.8
+                });
+                child.castShadow = true;
+                child.receiveShadow = true;
+            }
+        });
+
+        scene.add(object);
+    });
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+</script>
